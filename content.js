@@ -7,7 +7,7 @@ let lastMouseEvent = null;
 let mutationObserver = null; // Declare the observer variable
 
 // Load saved words from storage
-chrome.storage.sync.get(['savedWords'], function(result) {
+chrome.storage.local.get(['savedWords'], function(result) {
   if (result.savedWords && Array.isArray(result.savedWords)) {
     savedWords = new Set(result.savedWords);
   } else {
@@ -198,7 +198,7 @@ function removeWord(word) {
 
 // Save words to Chrome storage
 function saveWordsToStorage() {
-  chrome.storage.sync.set({
+  chrome.storage.local.set({
     savedWords: Array.from(savedWords)
   });
 }

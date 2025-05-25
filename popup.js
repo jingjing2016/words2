@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const wordContainer = document.getElementById('wordContainer');
   const refreshBtn = document.getElementById('refreshBtn');
   const clearAllBtn = document.getElementById('clearAllBtn');
+  const exportWordsBtn = document.getElementById('exportWordsBtn');
+  const importWordsBtn = document.getElementById('importWordsBtn');
+  const importFile = document.getElementById('importFile');
 
   // Load and display words when popup opens
   loadWords();
@@ -12,6 +15,11 @@ document.addEventListener('DOMContentLoaded', function() {
   // Event listeners
   refreshBtn.addEventListener('click', loadWords);
   clearAllBtn.addEventListener('click', clearAllWords);
+  exportWordsBtn.addEventListener('click', exportWords);
+  importWordsBtn.addEventListener('click', function() {
+    importFile.click();
+  });
+  importFile.addEventListener('change', importWords);
 
   function loadWords() {
     // Get current active tab
@@ -31,7 +39,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function loadWordsFromStorage() {
-    chrome.storage.sync.get(['savedWords'], function(result) {
+    chrome.storage.local.get(['savedWords'], function(result) {
       const words = result.savedWords || [];
       displayWords(words);
     });
@@ -93,10 +101,10 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function removeWordFromStorage(word) {
-    chrome.storage.sync.get(['savedWords'], function(result) {
+    chrome.storage.local.get(['savedWords'], function(result) {
       const words = result.savedWords || [];
       const updatedWords = words.filter(w => w !== word);
-      chrome.storage.sync.set({savedWords: updatedWords}, function() {
+      chrome.storage.local.set({savedWords: updatedWords}, function() {
         loadWords();
       });
     });
@@ -121,8 +129,63 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function clearWordsFromStorage() {
-    chrome.storage.sync.set({savedWords: []}, function() {
+    chrome.storage.local.set({savedWords: []}, function() {
       loadWords();
     });
+  }
+
+  function exportWords() {
+    chrome.storage.local.get(['savedWords'], function(result) {
+      const words = result.savedWords || [];
+      if (words.length === 0) {
+        alert('No words to export.');
+        return;
+      }
+      const jsonString = JSON.stringify(words, null, 2);
+      const blob = new Blob([jsonString], {type: 'application/json'});
+      const url = URL.createObjectURL(blob);
+      chrome.downloads.download({
+        url: url,
+        filename: 'wordlist.json',
+        saveAs: true
+      }, function() {
+        // Revoke the object URL after the download has started or completed
+        URL.revokeObjectURL(url);
+      });
+    });
+  }
+
+  function importWords(event) {
+    const file = event.target.files[0];
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const fileContent = e.target.result;
+        const importedWords = JSON.parse(fileContent);
+
+        if (!Array.isArray(importedWords) || !importedWords.every(word => typeof word === 'string')) {
+          alert('Invalid file format. Please select a JSON file containing an array of words.');
+          return;
+        }
+
+        chrome.storage.local.set({savedWords: importedWords}, function() {
+          loadWords();
+          alert('Words imported successfully!');
+        });
+      } catch (error) {
+        alert('Error parsing JSON file: ' + error.message);
+      }
+    };
+
+    reader.onerror = function() {
+      alert('Error reading file.');
+    };
+
+    reader.readAsText(file);
+    importFile.value = null; // Reset file input
   }
 });
