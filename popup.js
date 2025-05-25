@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="empty-state">
           <div class="empty-state-icon">📚</div>
           <div>No words saved yet</div>
-          <div style="font-size: 11px; margin-top: 4px;">Start collecting words by using Ctrl+Hover on any webpage!</div>
+          <div style="font-size: 11px; margin-top: 4px;">Start collecting words by using 2+Hover on any webpage!</div>
         </div>
       `;
       return;

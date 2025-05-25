@@ -1,7 +1,7 @@
 // Word Memory Assistant - Content Script
 
-let isCtrlPressed = false;
-let ctrlPressTimer = null; // Added to store the timer ID
+let isHotkeyPressed = false;
+let hotkeyPressTimer = null; // Added to store the timer ID
 let savedWords = new Set();
 let lastMouseEvent = null;
 let mutationObserver = null; // Declare the observer variable
@@ -35,12 +35,12 @@ document.addEventListener('mousemove', function(e) {
 
 // Track Ctrl key state
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Control' && !isCtrlPressed) {
-    isCtrlPressed = true;
-    clearTimeout(ctrlPressTimer); // Clear any existing timer
+  if (e.key === '2' && !isHotkeyPressed) {
+    isHotkeyPressed = true;
+    clearTimeout(hotkeyPressTimer); // Clear any existing timer
 
-    ctrlPressTimer = setTimeout(() => {
-      if (isCtrlPressed && lastMouseEvent) { // Check if Ctrl is still pressed
+    hotkeyPressTimer = setTimeout(() => {
+      if (isHotkeyPressed && lastMouseEvent) { // Check if Ctrl is still pressed
         const word = getWordUnderCursor(lastMouseEvent);
         if (word && word.length > 2) {
           if (savedWords.has(word)) {
@@ -55,9 +55,9 @@ document.addEventListener('keydown', function(e) {
 });
 
 document.addEventListener('keyup', function(e) {
-  if (e.key === 'Control') {
-    isCtrlPressed = false;
-    clearTimeout(ctrlPressTimer); // Clear the timer on key up
+  if (e.key === '2') {
+    isHotkeyPressed = false;
+    clearTimeout(hotkeyPressTimer); // Clear the timer on key up
   }
 });
 
