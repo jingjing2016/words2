@@ -1,21 +1,27 @@
 // Word Memory Assistant - Content Script
 
-let isHotkeyPressed = false;
-let hotkeyPressTimer = null; // Added to store the timer ID
-let savedWords = new Set();
+let savedWords = []; // Changed from Set to Array
 let lastMouseEvent = null;
 let mutationObserver = null; // Declare the observer variable
 
 // Load saved words from storage
 chrome.storage.local.get(['savedWords'], function(result) {
   if (result.savedWords && Array.isArray(result.savedWords)) {
-    savedWords = new Set(result.savedWords);
+    if (result.savedWords.length > 0 && typeof result.savedWords[0] === 'string') {
+      // Old format, migrate
+      savedWords = result.savedWords.map(wordStr => ({ word: wordStr, style: 'style-highlight' }));
+    } else if (result.savedWords.length > 0 && typeof result.savedWords[0] === 'object') {
+      // Assume new format, filter for valid items
+      savedWords = result.savedWords.filter(item => item && typeof item.word === 'string' && typeof item.style === 'string');
+    } else {
+      savedWords = []; // Empty or unrecognized format
+    }
   } else {
-    savedWords = new Set(); // Ensure savedWords is always a Set
+    savedWords = [];
   }
 
   function onDomReady() {
-    if (savedWords.size > 0) {
+    if (savedWords.length > 0) { // Changed from size to length
       highlightSavedWords(); // Initial highlight for static content
     }
     initMutationObserver(); // Start observing for dynamic content
@@ -35,29 +41,41 @@ document.addEventListener('mousemove', function(e) {
 
 // Track Ctrl key state
 document.addEventListener('keydown', function(e) {
-  if (e.key === '2' && !isHotkeyPressed) {
-    isHotkeyPressed = true;
-    clearTimeout(hotkeyPressTimer); // Clear any existing timer
+  if (['2', '3', '4', '5'].includes(e.key)) {
+    if (!lastMouseEvent) return; // Ensure we have a mouse event
 
-    hotkeyPressTimer = setTimeout(() => {
-      if (isHotkeyPressed && lastMouseEvent) { // Check if Ctrl is still pressed
-        const word = getWordUnderCursor(lastMouseEvent);
-        if (word && word.length > 2) {
-          if (savedWords.has(word)) {
-            removeWord(word);
-          } else {
-            addWord(word);
-          }
-        }
+    const word = getWordUnderCursor(lastMouseEvent);
+    if (!word || word.length <= 2) return;
+
+    let styleKey = '';
+    const wordIndex = savedWords.findIndex(item => item.word === word);
+
+    if (e.key === '2' || e.key === '3' || e.key === '4') {
+      if (e.key === '2') styleKey = 'style-highlight';
+      else if (e.key === '3') styleKey = 'style-green';
+      else if (e.key === '4') styleKey = 'style-underline';
+
+      if (wordIndex === -1) { // Word not found, add it
+        savedWords.push({ word: word, style: styleKey });
+        showMessage(`"${word}" added with ${styleKey}!`, 'success');
+      } else { // Word found, update its style
+        // If current style is same as new style, consider it a "remove" action for that style, then re-add if different
+        // For simplicity now, just update or re-apply.
+        savedWords[wordIndex].style = styleKey;
+        showMessage(`"${word}" style changed to ${styleKey}!`, 'success');
       }
-    }, 500); // 0.5-second delay
-  }
-});
-
-document.addEventListener('keyup', function(e) {
-  if (e.key === '2') {
-    isHotkeyPressed = false;
-    clearTimeout(hotkeyPressTimer); // Clear the timer on key up
+      applyStyleToWordInPage(word, styleKey);
+      saveWordsToStorage();
+    } else if (e.key === '5') {
+      if (wordIndex !== -1) {
+        savedWords.splice(wordIndex, 1);
+        removeStyleFromWordInPage(word); // Visually remove from page
+        saveWordsToStorage();
+        showMessage(`"${word}" removed!`, 'info');
+      } else {
+        showMessage(`"${word}" not found in your list.`, 'warning');
+      }
+    }
   }
 });
 
@@ -176,130 +194,112 @@ function getWordUnderCursor(e) {
   return resultWord;
 }
 
-// Add word to saved list
-function addWord(word) {
-  savedWords.add(word);
-  saveWordsToStorage();
-  highlightWord(word);
-  
-  // Show success message
-  showMessage(`"${word}" added to your word list!`, 'success');
-}
-
-// Remove word from saved list
-function removeWord(word) {
-  savedWords.delete(word);
-  saveWordsToStorage();
-  removeHighlight(word);
-  
-  // Show success message
-  showMessage(`"${word}" removed from your word list!`, 'info');
-}
-
 // Save words to Chrome storage
 function saveWordsToStorage() {
   chrome.storage.local.set({
-    savedWords: Array.from(savedWords)
+    savedWords: savedWords // No longer need Array.from
   });
 }
 
-// Highlight a specific word within a given rootNode
-function highlightWord(word, rootNode = document.body) {
-  const regex = new RegExp(`\\b${word}\\b`, 'gi'); // g for global, i for case-insensitive
+// Apply a specific style to instances of a word on the page
+function applyStyleToWordInPage(wordText, styleKey, rootNode = document.body) {
+  const regex = new RegExp(`\\b${wordText}\\b`, 'gi');
+  const styleClasses = ['style-highlight', 'style-green', 'style-underline'];
+
   const walker = document.createTreeWalker(
     rootNode,
     NodeFilter.SHOW_TEXT,
-    { // Filter function
+    {
       acceptNode: function(node) {
-        // Reject nodes whose parent is a SCRIPT, STYLE, or already highlighted element
-        if (node.parentElement) {
-          const parentTag = node.parentElement.tagName;
-          if (parentTag === 'SCRIPT' || parentTag === 'STYLE' || 
-              node.parentElement.classList.contains('word-memory-highlight') ||
-              node.parentElement.closest('.word-memory-highlight')) { // Check ancestors too
-            return NodeFilter.FILTER_REJECT;
-          }
+        if (node.parentElement && 
+            (node.parentElement.tagName === 'SCRIPT' || 
+             node.parentElement.tagName === 'STYLE' ||
+             node.parentElement.closest('.word-memory-message'))) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        // If the parent is already a styled span by us, we might need to re-evaluate or skip.
+        // For now, if the text content itself matches, we'll process it.
+        // This simple check avoids processing children of our own spans if they somehow get re-inserted.
+        if (node.parentElement && styleClasses.some(cls => node.parentElement.classList.contains(cls)) && node.parentElement.textContent.toLowerCase() === wordText.toLowerCase()) {
+            // If the parent is ALREADY a span we created for THIS word, just update its class
+            if (node.parentElement.textContent.toLowerCase() === wordText.toLowerCase()) {
+                 styleClasses.forEach(cls => node.parentElement.classList.remove(cls));
+                 node.parentElement.classList.add(styleKey);
+                 return NodeFilter.FILTER_REJECT; // Already handled
+            }
         }
         return NodeFilter.FILTER_ACCEPT;
       }
     },
     false
   );
-  
-  const textNodesToReplace = [];
+
+  const textNodesToProcess = [];
   let currentNode;
-  // First, collect all text nodes that match and need replacement
   while (currentNode = walker.nextNode()) {
-     // Check if the node's content actually matches the regex
-     // and ensure it's still part of the intended rootNode
     if (rootNode.contains(currentNode) && regex.test(currentNode.textContent)) {
-      regex.lastIndex = 0; // Reset lastIndex due to regex.test potentially advancing it
-      textNodesToReplace.push(currentNode);
+      regex.lastIndex = 0; // Reset regex
+      textNodesToProcess.push(currentNode);
     }
   }
 
-  // Then, iterate over the collected nodes to perform replacements
-  textNodesToReplace.forEach(textNode => {
-    // Ensure the node is still in the DOM and part of the rootNode before manipulating
-    if (!textNode.parentElement || !rootNode.contains(textNode)) {
-      return;
-    }
-    // If parent itself became a highlight (e.g. by sibling node processing), skip.
-    if (textNode.parentElement.classList.contains('word-memory-highlight')) {
-        return;
-    }
+  textNodesToProcess.forEach(textNode => {
+    if (!textNode.parentElement || !rootNode.contains(textNode)) return;
 
+    // If the direct parent is already a span we manage for this word, update it and skip further processing for this node.
+    if (textNode.parentElement.classList && styleClasses.some(cls => textNode.parentElement.classList.contains(cls)) && textNode.parentElement.textContent.toLowerCase() === wordText.toLowerCase()) {
+        styleClasses.forEach(cls => textNode.parentElement.classList.remove(cls));
+        textNode.parentElement.classList.add(styleKey);
+        return; // Skip to next textNode
+    }
+    
     const fragment = document.createDocumentFragment();
     let lastIndex = 0;
     let match;
-    regex.lastIndex = 0; // Reset regex for exec loop
+    regex.lastIndex = 0; 
 
-    // Loop through all matches of the word in the current text node
     while ((match = regex.exec(textNode.textContent)) !== null) {
-      // Add the text part before the match
       if (match.index > lastIndex) {
         fragment.appendChild(document.createTextNode(textNode.textContent.substring(lastIndex, match.index)));
       }
-      // Create and add the highlight span
       const span = document.createElement('span');
-      span.className = 'word-memory-highlight';
-      span.textContent = match[0]; // Use match[0] for the exact matched word (maintains case)
+      // Remove any pre-existing managed styles (though on a new span, this is for robustness)
+      styleClasses.forEach(cls => span.classList.remove(cls));
+      span.className = styleKey; // Set the new style
+      span.textContent = match[0];
       fragment.appendChild(span);
       lastIndex = regex.lastIndex;
     }
-    
-    // Add any remaining text after the last match
+
     if (lastIndex < textNode.textContent.length) {
       fragment.appendChild(document.createTextNode(textNode.textContent.substring(lastIndex)));
     }
 
-    // Replace the original text node with the fragment containing text and spans
-    if (fragment.childNodes.length > 0) { // Check if fragment has content
-        textNode.parentElement.replaceChild(fragment, textNode);
+    if (fragment.childNodes.length > 0) {
+      textNode.parentElement.replaceChild(fragment, textNode);
     }
   });
 }
 
 // Highlight all saved words across the entire document
 function highlightSavedWords() {
-  savedWords.forEach(word => {
-    highlightWord(word, document.body); // Explicitly pass document.body for initial full-page scan
+  savedWords.forEach(item => {
+    applyStyleToWordInPage(item.word, item.style, document.body);
   });
 }
 
-// Remove highlight for a specific word
-function removeHighlight(word) {
-  const highlights = document.querySelectorAll('.word-memory-highlight');
+// Remove all styles from instances of a word on the page
+function removeStyleFromWordInPage(wordText, rootNode = document.body) {
+  const styleClasses = ['style-highlight', 'style-green', 'style-underline'];
+  // Query all elements that might have one of our styles
+  const highlights = rootNode.querySelectorAll(styleClasses.map(cls => `.${cls}`).join(','));
+
   highlights.forEach(highlight => {
-    if (highlight.textContent.toLowerCase() === word.toLowerCase()) {
+    if (highlight.textContent.toLowerCase() === wordText.toLowerCase()) {
       const parent = highlight.parentElement;
-      if (parent) { // Ensure parent exists before trying to manipulate
+      if (parent) {
         parent.replaceChild(document.createTextNode(highlight.textContent), highlight);
-        parent.normalize();
-      } else if (document.body.contains(highlight)) { 
-        // Fallback if parent is somehow null but highlight is in body (less common)
-        // This case might indicate an issue elsewhere or a very unusual DOM structure
-        // For simplicity, this basic fallback might not always work as expected without a valid parent.
+        parent.normalize(); // Merges adjacent text nodes
       }
     }
   });
@@ -329,7 +329,7 @@ function showMessage(text, type) {
 
 // MutationObserver callback and initialization
 function mutationCallback(mutationsList, observer) {
-  if (savedWords.size === 0) {
+  if (savedWords.length === 0) {
     return;
   }
 
@@ -337,25 +337,33 @@ function mutationCallback(mutationsList, observer) {
     if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
       mutation.addedNodes.forEach(addedNode => {
         if (addedNode.nodeType === Node.ELEMENT_NODE) {
-          if (addedNode.classList.contains('word-memory-highlight') || 
+          // Skip if the added node itself is one of our styled spans or messages
+          if (addedNode.classList && (addedNode.classList.contains('style-highlight') ||
+              addedNode.classList.contains('style-green') ||
+              addedNode.classList.contains('style-underline') ||
               addedNode.closest('.word-memory-message') ||
               addedNode.tagName === 'SCRIPT' || 
-              addedNode.tagName === 'STYLE') {
+              addedNode.tagName === 'STYLE')) {
             return; 
           }
-          savedWords.forEach(word => {
-            highlightWord(word, addedNode); 
+          // Process saved words for this new node
+          savedWords.forEach(item => {
+            applyStyleToWordInPage(item.word, item.style, addedNode);
           });
         } else if (addedNode.nodeType === Node.TEXT_NODE && addedNode.parentElement) {
           const parentElement = addedNode.parentElement;
-          if (parentElement.classList.contains('word-memory-highlight') ||
+          // Skip if the parent is part of our UI or utility tags
+          if (parentElement.classList.contains('style-highlight') ||
+              parentElement.classList.contains('style-green') ||
+              parentElement.classList.contains('style-underline') ||
               parentElement.closest('.word-memory-message') ||
               parentElement.tagName === 'SCRIPT' ||
               parentElement.tagName === 'STYLE') {
             return;
           }
-          savedWords.forEach(word => {
-            highlightWord(word, parentElement);
+          // Process saved words for the parent of this new text node
+          savedWords.forEach(item => {
+            applyStyleToWordInPage(item.word, item.style, parentElement);
           });
         }
       });
@@ -378,22 +386,31 @@ function initMutationObserver() {
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
   if (request.action === 'getWords') {
-    sendResponse({words: Array.from(savedWords)});
+    sendResponse({words: savedWords}); 
   } else if (request.action === 'removeWord') {
-    removeWord(request.word);
-    sendResponse({success: true});
+    // This message might be deprecated if popup directly manipulates its list and calls save.
+    // For now, assume it's still used by popup for direct removal.
+    const wordToRemove = request.word;
+    const wordIndex = savedWords.findIndex(item => item.word === wordToRemove);
+    if (wordIndex !== -1) {
+      savedWords.splice(wordIndex, 1);
+      removeStyleFromWordInPage(wordToRemove);
+      saveWordsToStorage();
+      sendResponse({success: true});
+    } else {
+      sendResponse({success: false, message: "Word not found"});
+    }
   } else if (request.action === 'clearAllWords') {
-    savedWords.clear();
+    savedWords.forEach(item => removeStyleFromWordInPage(item.word)); // Remove all styles from page
+    savedWords = []; 
     saveWordsToStorage();
-    // Remove all highlights
-    const highlights = document.querySelectorAll('.word-memory-highlight');
-    highlights.forEach(highlight => {
-      const parent = highlight.parentElement;
-      if (parent) {
-        parent.replaceChild(document.createTextNode(highlight.textContent), highlight);
-        parent.normalize();
-      }
-    });
     sendResponse({success: true});
+  } else if (request.action === 'refreshHighlights') {
+    // This is a new action that can be called, for example, after importing words.
+    // It re-applies all highlights based on the current savedWords list.
+    // First, it might be good to clear existing highlights to avoid duplicates if words were removed/styles changed
+    // This depends on how robust applyStyleToWordInPage is. Assuming it handles already styled words correctly.
+    highlightSavedWords(); // Re-apply all highlights
+    sendResponse({success: true, message: "Highlights refreshed"});
   }
 });

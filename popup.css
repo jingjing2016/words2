@@ -1,0 +1,10 @@
+.style-highlight {
+    background-color: yellow;
+    font-weight: bold;
+}
+.style-green {
+    color: green;
+}
+.style-underline {
+    text-decoration: underline;
+}

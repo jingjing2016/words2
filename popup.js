@@ -59,74 +59,81 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    // Sort words alphabetically
-    words.sort();
+    // Sort words alphabetically by the 'word' property
+    words.sort((a, b) => a.word.localeCompare(b.word));
 
-    const wordsHTML = words.map(word => `
-      <div class="word-item">
-        <span class="word-text">${word}</span>
-        <button class="remove-btn" data-word="${word}">Remove</button>
-      </div>
-    `).join('');
+    wordContainer.innerHTML = ''; // Clear previous content
 
-    wordContainer.innerHTML = wordsHTML;
+    words.forEach(wordObj => {
+      const wordItemDiv = document.createElement('div');
+      wordItemDiv.className = 'word-item';
 
-    // Add event listeners to remove buttons
-    const removeButtons = wordContainer.querySelectorAll('.remove-btn');
-    removeButtons.forEach(btn => {
-      btn.addEventListener('click', function() {
-        const word = this.getAttribute('data-word');
-        removeWord(word);
-      });
+      const wordTextSpan = document.createElement('span');
+      wordTextSpan.className = 'word-text';
+      wordTextSpan.textContent = wordObj.word;
+      if (wordObj.style) {
+        wordTextSpan.classList.add(wordObj.style);
+      }
+
+      wordItemDiv.appendChild(wordTextSpan);
+      wordContainer.appendChild(wordItemDiv);
     });
 
-    // Add scrollbar class
-    wordContainer.classList.add('scrollbar');
+    // Add scrollbar class if needed
+    if (words.length > 0) {
+      wordContainer.classList.add('scrollbar');
+    } else {
+      wordContainer.classList.remove('scrollbar');
+    }
   }
 
-  function removeWord(word) {
-    // Get current active tab
-    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-      // Send message to content script to remove word
-      chrome.tabs.sendMessage(tabs[0].id, {action: 'removeWord', word: word}, function(response) {
-        if (chrome.runtime.lastError) {
-          // Fallback to storage if content script not available
-          removeWordFromStorage(word);
-        } else {
-          // Reload the word list
-          loadWords();
-        }
-      });
-    });
-  }
-
-  function removeWordFromStorage(word) {
-    chrome.storage.local.get(['savedWords'], function(result) {
-      const words = result.savedWords || [];
-      const updatedWords = words.filter(w => w !== word);
-      chrome.storage.local.set({savedWords: updatedWords}, function() {
-        loadWords();
-      });
-    });
-  }
+  // removeWord and removeWordFromStorage are no longer needed as individual removal is via hotkey 5.
+  // "Clear All" button handles bulk removal.
+  // The 'removeWord' message listener in content.js will handle requests if any other part sends it.
 
   function clearAllWords() {
     if (confirm('Are you sure you want to remove all words from your list? This action cannot be undone.')) {
       // Get current active tab
       chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+        if (tabs.length === 0) { // No active tab, fallback to storage
+          clearWordsFromStorage();
+          return;
+        }
         // Send message to content script to clear all words
         chrome.tabs.sendMessage(tabs[0].id, {action: 'clearAllWords'}, function(response) {
           if (chrome.runtime.lastError) {
-            // Fallback to storage if content script not available
+            // Fallback to storage if content script not available or error in sending
+            console.warn("Error sending clearAllWords to content script:", chrome.runtime.lastError.message, "Falling back to storage.");
             clearWordsFromStorage();
+          } else if (response && response.success) {
+            loadWords(); // Reload to update the popup
           } else {
-            // Reload the word list
-            loadWords();
+            // If content script reports failure or no response
+            console.warn("Content script clearAllWords was not successful. Falling back to storage.");
+            clearWordsFromStorage();
           }
         });
       });
     }
   }
+
+  // function clearAllWords() { // This is the duplicated, simpler version. Removing it.
+  //   if (confirm('Are you sure you want to remove all words from your list? This action cannot be undone.')) {
+  //     // Get current active tab
+  //     chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+  //       // Send message to content script to clear all words
+  //       chrome.tabs.sendMessage(tabs[0].id, {action: 'clearAllWords'}, function(response) {
+  //         if (chrome.runtime.lastError) {
+  //           // Fallback to storage if content script not available
+  //           clearWordsFromStorage();
+  //         } else {
+  //           // Reload the word list
+  //           loadWords();
+  //         }
+  //       });
+  //     });
+  //   }
+  // }
 
   function clearWordsFromStorage() {
     chrome.storage.local.set({savedWords: []}, function() {
@@ -165,16 +172,44 @@ document.addEventListener('DOMContentLoaded', function() {
     reader.onload = function(e) {
       try {
         const fileContent = e.target.result;
-        const importedWords = JSON.parse(fileContent);
+        let importedData = JSON.parse(fileContent);
 
-        if (!Array.isArray(importedWords) || !importedWords.every(word => typeof word === 'string')) {
-          alert('Invalid file format. Please select a JSON file containing an array of words.');
+        // Validate and transform if necessary (e.g., old string array format)
+        if (!Array.isArray(importedData)) {
+          alert('Invalid file format. Expected a JSON array.');
           return;
         }
 
-        chrome.storage.local.set({savedWords: importedWords}, function() {
-          loadWords();
+        let wordsToStore = [];
+        if (importedData.length > 0 && typeof importedData[0] === 'string') {
+          // Old format: array of strings. Convert to new format.
+          wordsToStore = importedData.map(wordStr => ({ word: wordStr, style: 'style-highlight' }));
+          alert('Old format detected and migrated. Words imported successfully!');
+        } else if (importedData.every(item => item && typeof item.word === 'string' && typeof item.style === 'string')) {
+          // New format: array of objects. Use as is.
+          wordsToStore = importedData;
           alert('Words imported successfully!');
+        } else {
+          alert('Invalid file format. Please select a JSON file containing an array of words (strings) or word objects ({word, style}).');
+          return;
+        }
+        
+        chrome.storage.local.set({savedWords: wordsToStore}, function() {
+          if (chrome.runtime.lastError) {
+            alert('Error saving imported words: ' + chrome.runtime.lastError.message);
+          } else {
+            loadWords(); // Refresh the list in the popup
+            // Also, try to inform content script to refresh its highlights
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+              if (tabs[0] && tabs[0].id) {
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'refreshHighlights'}, function(response) {
+                  if (chrome.runtime.lastError) {
+                    console.log("Could not send refreshHighlights message to content script after import.");
+                  }
+                });
+              }
+            });
+          }
         });
       } catch (error) {
         alert('Error parsing JSON file: ' + error.message);

@@ -39,3 +39,15 @@
 .word-memory-message.success {
   background: #27ae60;
 }
+
+.style-green {
+    color: green !important; /* Using !important to ensure override if necessary */
+    background-color: transparent !important; /* Ensure no unintended background */
+}
+
+.style-underline {
+    text-decoration: underline !important; /* Using !important for emphasis */
+    text-decoration-color: initial !important; /* Or specify a color if desired */
+    color: inherit !important; /* Keep original text color */
+    background-color: transparent !important; /* Ensure no unintended background */
+}
